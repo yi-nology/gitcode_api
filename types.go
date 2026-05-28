@@ -1,0 +1,135 @@
+package gitcode
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+type Timestamp struct {
+	time.Time
+}
+
+func (t *Timestamp) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	tt, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return err
+	}
+	t.Time = tt
+	return nil
+}
+
+type Error struct {
+	Message string `json:"message"`
+	Errors  []struct {
+		Resource string `json:"resource"`
+		Field    string `json:"field"`
+		Code     string `json:"code"`
+	} `json:"errors"`
+}
+
+func (e *Error) Error() string {
+	return e.Message
+}
+
+type SearchOptions struct {
+	ListOptions
+	Query  string `json:"q"`
+	Order  string `json:"order,omitempty"`
+}
+
+type SearchResult struct {
+	TotalCount int `json:"total_count"`
+	Items      []*Repository `json:"items"`
+}
+
+type Notification struct {
+	ID     string `json:"id"`
+	Reason string `json:"reason"`
+	Unread bool   `json:"unread"`
+	Subject struct {
+		Title string `json:"title"`
+		URL   string `json:"url"`
+		Type  string `json:"type"`
+	} `json:"subject"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type Star struct {
+	StarredAt time.Time `json:"starred_at"`
+}
+
+type Member struct {
+	ID       int64  `json:"id"`
+	Login    string `json:"login"`
+	Role     string `json:"role"`
+}
+
+type Organization struct {
+	ID          int64  `json:"id"`
+	Login       string `json:"login"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	AvatarURL   string `json:"avatar_url"`
+}
+
+func (c *Client) ListOrganizations(ctx context.Context) ([]*Organization, error) {
+	var orgs []*Organization
+	err := c.doRequest(ctx, http.MethodGet, "/user/orgs", nil, &orgs)
+	if err != nil {
+		return nil, err
+	}
+	return orgs, nil
+}
+
+func (c *Client) GetOrganization(ctx context.Context, org string) (*Organization, error) {
+	var o Organization
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/orgs/%s", org), nil, &o)
+	if err != nil {
+		return nil, err
+	}
+	return &o, nil
+}
+
+func (c *Client) ListOrganizationMembers(ctx context.Context, org string) ([]*Member, error) {
+	var members []*Member
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/orgs/%s/members", org), nil, &members)
+	if err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+func (c *Client) ListNotifications(ctx context.Context) ([]*Notification, error) {
+	var notifications []*Notification
+	err := c.doRequest(ctx, http.MethodGet, "/notifications", nil, &notifications)
+	if err != nil {
+		return nil, err
+	}
+	return notifications, nil
+}
+
+func (c *Client) StarRepository(ctx context.Context, owner, repo string) error {
+	return c.doRequest(ctx, http.MethodPut, fmt.Sprintf("/user/starred/%s/%s", owner, repo), nil, nil)
+}
+
+func (c *Client) UnstarRepository(ctx context.Context, owner, repo string) error {
+	return c.doRequest(ctx, http.MethodDelete, fmt.Sprintf("/user/starred/%s/%s", owner, repo), nil, nil)
+}
+
+func (c *Client) IsRepositoryStarred(ctx context.Context, owner, repo string) (bool, error) {
+	_, err := c.doRawRequest(ctx, http.MethodGet, fmt.Sprintf("/user/starred/%s/%s", owner, repo))
+	if err != nil {
+		if err.Error() == "404 Not Found" {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
