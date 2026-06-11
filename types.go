@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -17,11 +19,73 @@ func (t *Timestamp) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err
 	}
+	if s == "" {
+		return nil
+	}
 	tt, err := time.Parse(time.RFC3339, s)
 	if err != nil {
 		return err
 	}
 	t.Time = tt
+	return nil
+}
+
+type NullableTime struct {
+	time.Time
+	Valid bool
+}
+
+func (nt *NullableTime) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	if s == "" {
+		nt.Valid = false
+		return nil
+	}
+	tt, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return err
+	}
+	nt.Time = tt
+	nt.Valid = true
+	return nil
+}
+
+type FlexInt int
+
+func (fi *FlexInt) UnmarshalJSON(data []byte) error {
+	var n int
+	if err := json.Unmarshal(data, &n); err == nil {
+		*fi = FlexInt(n)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	parsed, err := strconv.Atoi(s)
+	if err != nil {
+		return err
+	}
+	*fi = FlexInt(parsed)
+	return nil
+}
+
+type FlexString string
+
+func (fs *FlexString) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*fs = FlexString(s)
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*fs = FlexString(strconv.FormatInt(n, 10))
 	return nil
 }
 
@@ -66,7 +130,7 @@ type Star struct {
 }
 
 type Member struct {
-	ID       int64  `json:"id"`
+	ID       string `json:"id"`
 	Login    string `json:"login"`
 	Role     string `json:"role"`
 }
@@ -83,7 +147,7 @@ func (c *Client) ListOrganizations(ctx context.Context) ([]*Organization, error)
 	var orgs []*Organization
 	err := c.doRequest(ctx, http.MethodGet, "/user/orgs", nil, &orgs)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("ListOrganizations not supported by this GitCode instance: %w", err)
 	}
 	return orgs, nil
 }
@@ -126,7 +190,7 @@ func (c *Client) UnstarRepository(ctx context.Context, owner, repo string) error
 func (c *Client) IsRepositoryStarred(ctx context.Context, owner, repo string) (bool, error) {
 	_, err := c.doRawRequest(ctx, http.MethodGet, fmt.Sprintf("/user/starred/%s/%s", owner, repo))
 	if err != nil {
-		if err.Error() == "404 Not Found" {
+		if strings.Contains(err.Error(), "404") {
 			return false, nil
 		}
 		return false, err

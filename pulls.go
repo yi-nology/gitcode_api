@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -11,60 +12,73 @@ type PullRequestState string
 
 const (
 	PullRequestStateOpen   PullRequestState = "open"
+	PullRequestStateOpened PullRequestState = "opened"
 	PullRequestStateClosed PullRequestState = "closed"
+	PullRequestStateMerged PullRequestState = "merged"
 )
 
 type PullRequest struct {
-	ID           int64           `json:"id"`
-	Number       int             `json:"number"`
-	Title        string          `json:"title"`
-	Body         string          `json:"body"`
+	ID           int64            `json:"id"`
+	Number       int              `json:"number"`
+	IID          int              `json:"iid,omitempty"`
+	Title        string           `json:"title"`
+	Body         string           `json:"body"`
+	Description  string           `json:"description,omitempty"`
 	State        PullRequestState `json:"state"`
-	Author       *User           `json:"author"`
+	User         *User            `json:"user"`
+	Author       *User            `json:"author"`
 	Head         *PullRequestBranch `json:"head"`
 	Base         *PullRequestBranch `json:"base"`
-	Merged       bool            `json:"merged"`
-	Mergeable    *bool           `json:"mergeable"`
-	HTMLURL      string          `json:"html_url"`
-	DiffURL      string          `json:"diff_url"`
-	PatchURL     string          `json:"patch_url"`
-	CreatedAt    time.Time       `json:"created_at"`
-	UpdatedAt    time.Time       `json:"updated_at"`
-	ClosedAt     *time.Time      `json:"closed_at"`
-	MergedAt     *time.Time      `json:"merged_at"`
+	Merged       bool             `json:"merged"`
+	Mergeable    *bool            `json:"mergeable"`
+	HTMLURL      string           `json:"html_url"`
+	DiffURL      string           `json:"diff_url,omitempty"`
+	PatchURL     string           `json:"patch_url,omitempty"`
+	Draft        bool             `json:"draft,omitempty"`
+	CreatedAt    time.Time    `json:"created_at"`
+	UpdatedAt    time.Time    `json:"updated_at"`
+	ClosedAt     NullableTime `json:"closed_at,omitempty"`
+	MergedAt     NullableTime `json:"merged_at,omitempty"`
 }
 
 type PullRequestBranch struct {
-	Ref string `json:"ref"`
-	SHA string `json:"sha"`
-	Repo *Repository `json:"repo"`
+	Ref  string `json:"ref"`
+	SHA  string `json:"sha"`
+	Repo *struct {
+		FullName string `json:"full_name"`
+		Name     string `json:"name"`
+		Path     string `json:"path"`
+		HTMLURL  string `json:"html_url"`
+	} `json:"repo"`
 }
 
 type PullRequestFile struct {
-	Filename        string `json:"filename"`
-	PreviousFilename string `json:"previous_filename"`
-	Status          string `json:"status"`
-	Additions       int    `json:"additions"`
-	Deletions       int    `json:"deletions"`
-	Changes         int    `json:"changes"`
-	Patch           string `json:"patch"`
+	Filename        string      `json:"filename"`
+	PreviousFilename string     `json:"previous_filename,omitempty"`
+	Status          string      `json:"status"`
+	Additions       int         `json:"additions"`
+	Deletions       int         `json:"deletions"`
+	Changes         int         `json:"changes"`
+	Patch           interface{} `json:"patch,omitempty"`
 }
 
 type PullRequestComment struct {
-	ID        int64     `json:"id"`
-	Body      string    `json:"body"`
-	Author    *User     `json:"author"`
-	Path      string    `json:"path"`
-	Position  int       `json:"position"`
-	CommitID  string    `json:"commit_id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        FlexString `json:"id"`
+	Body      string     `json:"body"`
+	User      *User      `json:"user"`
+	Author    *User      `json:"author"`
+	Path      string     `json:"path"`
+	Position  int        `json:"position"`
+	CommitID  string     `json:"commit_id"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 type PullRequestReview struct {
 	ID        int64     `json:"id"`
 	Body      string    `json:"body"`
 	State     string    `json:"state"`
+	User      *User     `json:"user"`
 	Author    *User     `json:"author"`
 	CommitID  string    `json:"commit_id"`
 	CreatedAt time.Time `json:"created_at"`
@@ -89,10 +103,11 @@ type CreatePullRequestOptions struct {
 }
 
 type UpdatePullRequestOptions struct {
-	Title        string          `json:"title,omitempty"`
-	Body         string          `json:"body,omitempty"`
-	State        PullRequestState `json:"state,omitempty"`
-	Base         string          `json:"base,omitempty"`
+	Title      string          `json:"title,omitempty"`
+	Body       string          `json:"body,omitempty"`
+	State      PullRequestState `json:"state,omitempty"`
+	StateEvent string          `json:"state_event,omitempty"`
+	Base       string          `json:"base,omitempty"`
 }
 
 func (c *Client) ListPullRequests(ctx context.Context, owner, repo string, opts ListPullRequestsOptions) ([]*PullRequest, error) {
@@ -148,11 +163,25 @@ func (c *Client) UpdatePullRequest(ctx context.Context, owner, repo string, numb
 }
 
 func (c *Client) ClosePullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
-	return c.UpdatePullRequest(ctx, owner, repo, number, UpdatePullRequestOptions{State: PullRequestStateClosed})
+	pr, err := c.GetPullRequest(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	return c.UpdatePullRequest(ctx, owner, repo, number, UpdatePullRequestOptions{
+		Title:      pr.Title,
+		StateEvent: "close",
+	})
 }
 
 func (c *Client) ReopenPullRequest(ctx context.Context, owner, repo string, number int) (*PullRequest, error) {
-	return c.UpdatePullRequest(ctx, owner, repo, number, UpdatePullRequestOptions{State: PullRequestStateOpen})
+	pr, err := c.GetPullRequest(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	return c.UpdatePullRequest(ctx, owner, repo, number, UpdatePullRequestOptions{
+		Title:      pr.Title,
+		StateEvent: "reopen",
+	})
 }
 
 type MergePullRequestOptions struct {
@@ -176,7 +205,7 @@ func (c *Client) MergePullRequest(ctx context.Context, owner, repo string, numbe
 func (c *Client) IsPullRequestMerged(ctx context.Context, owner, repo string, number int) (bool, error) {
 	_, err := c.doRawRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d/merge", owner, repo, number))
 	if err != nil {
-		if err.Error() == "404 Not Found" {
+		if strings.Contains(err.Error(), "404") {
 			return false, nil
 		}
 		return false, err
@@ -216,17 +245,17 @@ func (c *Client) CreatePullRequestComment(ctx context.Context, owner, repo strin
 	return &comment, nil
 }
 
-func (c *Client) UpdatePullRequestComment(ctx context.Context, owner, repo string, commentID int64, body string) (*PullRequestComment, error) {
+func (c *Client) UpdatePullRequestComment(ctx context.Context, owner, repo string, commentID string, body string) (*PullRequestComment, error) {
 	var comment PullRequestComment
-	err := c.doRequest(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/pulls/comments/%d", owner, repo, commentID), map[string]string{"body": body}, &comment)
+	err := c.doRequest(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/pulls/comments/%s", owner, repo, commentID), map[string]string{"body": body}, &comment)
 	if err != nil {
 		return nil, err
 	}
 	return &comment, nil
 }
 
-func (c *Client) DeletePullRequestComment(ctx context.Context, owner, repo string, commentID int64) error {
-	return c.doRequest(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/%s/pulls/comments/%d", owner, repo, commentID), nil, nil)
+func (c *Client) DeletePullRequestComment(ctx context.Context, owner, repo string, commentID string) error {
+	return c.doRequest(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/%s/pulls/comments/%s", owner, repo, commentID), nil, nil)
 }
 
 func (c *Client) ListPullRequestReviews(ctx context.Context, owner, repo string, number int) ([]*PullRequestReview, error) {
@@ -257,4 +286,164 @@ func (c *Client) ListPullRequestCommits(ctx context.Context, owner, repo string,
 		return nil, err
 	}
 	return commits, nil
+}
+
+func (c *Client) ListPullRequestLabels(ctx context.Context, owner, repo string, number int) ([]*Label, error) {
+	var labels []*Label
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d/labels", owner, repo, number), nil, &labels)
+	if err != nil {
+		return nil, err
+	}
+	return labels, nil
+}
+
+func (c *Client) AddPullRequestLabels(ctx context.Context, owner, repo string, number int, labels []string) error {
+	return c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls/%d/labels", owner, repo, number), labels, nil)
+}
+
+func (c *Client) RemovePullRequestLabel(ctx context.Context, owner, repo string, number int, name string) error {
+	return c.doRequest(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/%s/pulls/%d/labels/%s", owner, repo, number, name), nil, nil)
+}
+
+func (c *Client) ReplacePullRequestLabels(ctx context.Context, owner, repo string, number int, labels []string) error {
+	return c.doRequest(ctx, http.MethodPut, fmt.Sprintf("/repos/%s/%s/pulls/%d/labels", owner, repo, number), labels, nil)
+}
+
+func (c *Client) AssignPullRequestReviewers(ctx context.Context, owner, repo string, number int, assignees string) error {
+	return c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls/%d/assignees", owner, repo, number), map[string]string{"assignees": assignees}, nil)
+}
+
+func (c *Client) UnassignPullRequestReviewers(ctx context.Context, owner, repo string, number int, assignees string) error {
+	return c.doRequest(ctx, http.MethodDelete, fmt.Sprintf("/repos/%s/%s/pulls/%d/assignees?assignees=%s", owner, repo, number, assignees), nil, nil)
+}
+
+func (c *Client) AssignPullRequestTesters(ctx context.Context, owner, repo string, number int, testers string) error {
+	return c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls/%d/testers", owner, repo, number), map[string]string{"testers": testers}, nil)
+}
+
+func (c *Client) HandlePullRequestTest(ctx context.Context, owner, repo string, number int, force bool) error {
+	body := map[string]interface{}{}
+	if force {
+		body["force"] = true
+	}
+	return c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls/%d/test", owner, repo, number), body, nil)
+}
+
+func (c *Client) HandlePullRequestReview(ctx context.Context, owner, repo string, number int, force bool) error {
+	body := map[string]interface{}{}
+	if force {
+		body["force"] = true
+	}
+	return c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls/%d/review", owner, repo, number), body, nil)
+}
+
+func (c *Client) ResetPullRequestTestStatus(ctx context.Context, owner, repo string, number int, resetAll bool) error {
+	body := map[string]interface{}{}
+	if resetAll {
+		body["reset_all"] = true
+	}
+	return c.doRequest(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/pulls/%d/testers", owner, repo, number), body, nil)
+}
+
+func (c *Client) ResetPullRequestReviewStatus(ctx context.Context, owner, repo string, number int, resetAll bool) error {
+	body := map[string]interface{}{}
+	if resetAll {
+		body["reset_all"] = true
+	}
+	return c.doRequest(ctx, http.MethodPatch, fmt.Sprintf("/repos/%s/%s/pulls/%d/assignees", owner, repo, number), body, nil)
+}
+
+type PROperateLog struct {
+	ID        int64  `json:"id"`
+	Action    string `json:"action"`
+	CreatedAt string `json:"created_at"`
+	User      *User  `json:"user"`
+}
+
+func (c *Client) GetPullRequestOperateLogs(ctx context.Context, owner, repo string, number int) ([]*PROperateLog, error) {
+	var logs []*PROperateLog
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d/operate_logs", owner, repo, number), nil, &logs)
+	if err != nil {
+		return nil, err
+	}
+	return logs, nil
+}
+
+func (c *Client) GetPullRequestLinkedIssues(ctx context.Context, owner, repo string, number int, opts ListOptions) ([]*Issue, error) {
+	var issues []*Issue
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/%d/issues?%s", owner, repo, number, opts.toQuery()), nil, &issues)
+	if err != nil {
+		return nil, err
+	}
+	return issues, nil
+}
+
+func (c *Client) GetPullRequestComment(ctx context.Context, owner, repo string, commentID int64) (*PullRequestComment, error) {
+	var comment PullRequestComment
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/pulls/comments/%d", owner, repo, commentID), nil, &comment)
+	if err != nil {
+		return nil, err
+	}
+	return &comment, nil
+}
+
+type ListEnterprisePRsOptions struct {
+	ListOptions
+	State       string `json:"state,omitempty"`
+	IssueNumber int    `json:"issue_number,omitempty"`
+	Sort        string `json:"sort,omitempty"`
+	Direction   string `json:"direction,omitempty"`
+}
+
+func (c *Client) ListEnterprisePullRequests(ctx context.Context, enterprise string, opts ListEnterprisePRsOptions) ([]*PullRequest, error) {
+	var prs []*PullRequest
+	query := opts.toQuery()
+	if opts.State != "" {
+		query += "&state=" + opts.State
+	}
+	if opts.IssueNumber > 0 {
+		query += fmt.Sprintf("&issue_number=%d", opts.IssueNumber)
+	}
+	if opts.Sort != "" {
+		query += "&sort=" + opts.Sort
+	}
+	if opts.Direction != "" {
+		query += "&direction=" + opts.Direction
+	}
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/enterprises/%s/pull_requests?%s", enterprise, query), nil, &prs)
+	if err != nil {
+		return nil, err
+	}
+	return prs, nil
+}
+
+func (c *Client) ListOrgPullRequests(ctx context.Context, org string, opts ListEnterprisePRsOptions) ([]*PullRequest, error) {
+	var prs []*PullRequest
+	query := opts.toQuery()
+	if opts.State != "" {
+		query += "&state=" + opts.State
+	}
+	if opts.IssueNumber > 0 {
+		query += fmt.Sprintf("&issue_number=%d", opts.IssueNumber)
+	}
+	if opts.Sort != "" {
+		query += "&sort=" + opts.Sort
+	}
+	if opts.Direction != "" {
+		query += "&direction=" + opts.Direction
+	}
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/org/%s/pull_requests?%s", org, query), nil, &prs)
+	if err != nil {
+		return nil, err
+	}
+	return prs, nil
+}
+
+func (c *Client) GetEnterpriseIssueLinkedPRs(ctx context.Context, enterprise string, number int) ([]*PullRequest, error) {
+	var prs []*PullRequest
+	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/enterprises/%s/issues/%d/pull_requests", enterprise, number), nil, &prs)
+	if err != nil {
+		return nil, err
+	}
+	return prs, nil
 }

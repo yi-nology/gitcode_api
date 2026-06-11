@@ -9,12 +9,17 @@ import (
 )
 
 type Webhook struct {
-	ID        int64     `json:"id"`
-	URL       string    `json:"url"`
-	Events    []string  `json:"events"`
-	Active    bool      `json:"active"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID                  int64     `json:"id"`
+	URL                 string    `json:"url"`
+	Events              []string  `json:"events"`
+	PushEvents          bool      `json:"push_events"`
+	TagPushEvents       bool      `json:"tag_push_events"`
+	IssuesEvents        bool      `json:"issues_events"`
+	MergeRequestsEvents bool      `json:"merge_requests_events"`
+	NoteEvents          bool      `json:"note_events"`
+	Active              bool      `json:"active"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
 }
 
 type CreateWebhookOptions struct {
@@ -99,6 +104,23 @@ type IssueWebhookEvent struct {
 	Sender     *User       `json:"sender"`
 }
 
+type NoteWebhookEvent struct {
+	NoteType   string      `json:"noteable_type"`
+	NoteID     int64       `json:"id"`
+	Body       string      `json:"body"`
+	Author     *User       `json:"author"`
+	Repository *Repository `json:"repository"`
+	Sender     *User       `json:"sender"`
+}
+
+type TagPushEvent struct {
+	Ref        string      `json:"ref"`
+	Before     string      `json:"before"`
+	After      string      `json:"after"`
+	Repository *Repository `json:"repository"`
+	Sender     *User       `json:"sender"`
+}
+
 type PushEvent struct {
 	Ref        string      `json:"ref"`
 	Before     string      `json:"before"`
@@ -126,6 +148,22 @@ func (c *Client) ParsePullRequestEvent(payload []byte) (*PullRequestWebhookEvent
 
 func (c *Client) ParseIssueEvent(payload []byte) (*IssueWebhookEvent, error) {
 	var event IssueWebhookEvent
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
+func (c *Client) ParseNoteEvent(payload []byte) (*NoteWebhookEvent, error) {
+	var event NoteWebhookEvent
+	if err := json.Unmarshal(payload, &event); err != nil {
+		return nil, err
+	}
+	return &event, nil
+}
+
+func (c *Client) ParseTagPushEvent(payload []byte) (*TagPushEvent, error) {
+	var event TagPushEvent
 	if err := json.Unmarshal(payload, &event); err != nil {
 		return nil, err
 	}

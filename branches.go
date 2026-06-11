@@ -8,9 +8,10 @@ import (
 )
 
 type Branch struct {
-	Name      string     `json:"name"`
-	Commit    *Commit    `json:"commit"`
-	Protected bool       `json:"protected"`
+	Name          string              `json:"name"`
+	Commit        *BranchCommitDetail `json:"commit"`
+	DefaultBranch bool                `json:"default_branch,omitempty"`
+	Protected     bool                `json:"protected"`
 }
 
 type Commit struct {
@@ -19,6 +20,23 @@ type Commit struct {
 	Author    *User     `json:"author"`
 	Committer *User     `json:"committer"`
 	CreatedAt time.Time `json:"created_at"`
+	URL       string    `json:"url,omitempty"`
+}
+
+type BranchCommitDetail struct {
+	SHA    string `json:"sha"`
+	URL    string `json:"url"`
+	Commit *struct {
+		Author    *CommitAuthor `json:"author"`
+		Committer *CommitAuthor `json:"committer"`
+		Message   string        `json:"message"`
+	} `json:"commit"`
+}
+
+type CommitAuthor struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Date  string `json:"date"`
 }
 
 type BranchProtection struct {
@@ -49,7 +67,8 @@ func (c *Client) GetBranch(ctx context.Context, owner, repo, branch string) (*Br
 
 type CreateBranchOptions struct {
 	BranchName string `json:"branch_name"`
-	Ref        string `json:"ref"`
+	Refs       string `json:"refs"`
+	Ref        string `json:"ref,omitempty"`
 }
 
 func (c *Client) CreateBranch(ctx context.Context, owner, repo string, opts CreateBranchOptions) (*Branch, error) {
@@ -159,4 +178,13 @@ func (c *Client) ListCommits(ctx context.Context, owner, repo string, opts ListC
 		return nil, err
 	}
 	return commits, nil
+}
+
+type UpdateBranchProtectionOptions struct {
+	Pusher string `json:"pusher"`
+	Merger string `json:"merger"`
+}
+
+func (c *Client) UpdateBranchProtection(ctx context.Context, owner, repo, wildcard string, opts UpdateBranchProtectionOptions) error {
+	return c.doRequest(ctx, http.MethodPut, fmt.Sprintf("/repos/%s/%s/branches/%s/setting", owner, repo, wildcard), opts, nil)
 }

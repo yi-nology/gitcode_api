@@ -59,7 +59,7 @@ func main() {
 	}
 	fmt.Printf("\nIssue 列表:\n")
 	for _, issue := range issues {
-		fmt.Printf("#%d: %s\n", issue.Number, issue.Title)
+		fmt.Printf("#%d: %s\n", int(issue.Number), issue.Title)
 	}
 
 	// 列出 Pull Request

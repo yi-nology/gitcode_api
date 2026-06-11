@@ -11,13 +11,18 @@ Go 语言的 GitCode / AtomGit API 客户端库，提供对 GitCode 平台的完
 ## 功能特性
 
 - 🔐 **认证管理** - 支持 Bearer Token、PRIVATE-TOKEN、access_token 多种认证方式
-- 📦 **仓库管理** - 创建、更新、删除、Fork 仓库，文件操作
-- 🐛 **Issue 管理** - 创建、更新、关闭 Issue，标签、里程碑管理
-- 🔀 **Pull Request** - 创建、合并、审查 Pull Request
+- 🔍 **搜索** - 搜索仓库、Issue、用户
+- 📦 **仓库管理** - 创建、更新、删除、Fork 仓库，文件操作，Tree/Blob，设置管理
+- 📄 **文件操作** - CRUD 文件，原始内容，目录树，文件/图片上传
+- 🐛 **Issue 管理** - 创建、更新、关闭 Issue，标签、里程碑、操作日志
+- 🔀 **Pull Request** - 创建、合并、审查 PR，标签、测试人、审查人管理
 - 🌿 **分支管理** - 创建、删除、保护分支，提交比较
 - 🔔 **Webhook** - 创建、更新、删除 Webhook，事件解析
-- 👤 **用户与组织** - 获取用户信息，管理组织成员
-- ⭐ **Star 管理** - Star/Unstar 仓库
+- 👤 **用户管理** - 用户信息、SSH 公钥、邮箱、动态、Star 仓库列表
+- 🏢 **组织/企业** - 组织管理、成员邀请/移除、企业成员、Issue 扩展配置
+- 🏷️ **标签管理** - 仓库标签 CRUD、Issue 标签替换、企业标签
+- 📅 **里程碑** - 创建、更新、删除里程碑
+- ⭐ **Star/Watch** - Star/Unstar 仓库，列出 Stargazer/Watcher
 
 ## 安装
 
@@ -251,19 +256,81 @@ release, _ := client.CreateRelease(ctx, "owner", "repo", gitcode.CreateReleaseOp
 })
 ```
 
+### 搜索
+
+```go
+// 搜索仓库
+repos, _ := client.SearchRepositories(ctx, gitcode.SearchRepositoriesOptions{
+    Query: "golang framework",
+    Sort:  "stars_count",
+})
+
+// 搜索 Issue
+issues, _ := client.SearchIssues(ctx, gitcode.SearchIssuesOptions{
+    Query: "bug",
+    Repo:  "owner/repo",
+    State: "open",
+})
+
+// 搜索用户
+users, _ := client.SearchUsers(ctx, gitcode.SearchUsersOptions{
+    Query: "test",
+})
+```
+
+### SSH 公钥
+
+```go
+// 列出公钥
+keys, _ := client.ListSSHKeys(ctx, gitcode.ListOptions{})
+
+// 添加公钥
+key, _ := client.CreateSSHKey(ctx, gitcode.CreateSSHKeyOptions{
+    Title: "my-key",
+    Key:   "ssh-ed25519 AAAA...",
+})
+
+// 删除公钥
+err := client.DeleteSSHKey(ctx, key.ID)
+```
+
+### 里程碑
+
+```go
+// 列出里程碑
+milestones, _ := client.ListMilestones(ctx, "owner", "repo")
+
+// 获取单个里程碑
+milestone, _ := client.GetMilestone(ctx, "owner", "repo", 1)
+
+// 更新里程碑
+milestone, _ = client.UpdateMilestone(ctx, "owner", "repo", 1, gitcode.UpdateMilestoneOptions{
+    Title: "v2.0",
+    State: "open",
+    DueOn: "2025-12-31",
+})
+```
+
 ## 项目结构
 
 ```
 gitcode_api/
-├── client.go      # 基础客户端、认证、用户 API
-├── repos.go       # 仓库管理、文件操作、标签、发布
-├── issues.go      # Issue 管理、标签、里程碑
-├── pulls.go       # Pull Request 管理、审查、合并
-├── branches.go    # 分支管理、保护分支、提交比较
-├── webhooks.go    # Webhook 管理、事件解析
-├── types.go       # 通用类型定义
+├── client.go             # 基础客户端、认证、用户 API、限流
+├── repos.go              # 仓库管理、文件操作、标签、发布、Tree/Blob、设置
+├── issues.go             # Issue 管理、标签、里程碑
+├── enterprise_issues.go  # 用户/组织/企业 Issue、操作日志、关联 PR
+├── pulls.go              # Pull Request 管理、审查、合并、标签、测试
+├── branches.go           # 分支管理、保护分支、提交比较
+├── webhooks.go           # Webhook 管理、事件解析
+├── search.go             # 搜索仓库、Issue、用户
+├── users.go              # SSH 公钥、邮箱、动态、Star 仓库
+├── orgs.go               # 组织/企业管理、成员管理
+├── milestones.go         # 里程碑 CRUD
+├── labels.go             # 标签管理、企业标签
+├── types.go              # 通用类型定义
+├── gitcode_test.go       # 测试用例
 └── examples/
-    └── main.go    # 使用示例
+    └── main.go           # 使用示例
 ```
 
 ## 与 gitcode-cli 的关系

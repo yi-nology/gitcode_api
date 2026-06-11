@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -112,8 +113,10 @@ func (c *Client) doRequestWithHeaders(ctx context.Context, method, path string, 
 	}
 
 	if result != nil && resp.StatusCode != http.StatusNoContent {
-		if err := json.Unmarshal(respBody, result); err != nil {
-			return nil, err
+		if len(respBody) > 0 {
+			if err := json.Unmarshal(respBody, result); err != nil {
+				return nil, err
+			}
 		}
 	}
 
@@ -146,6 +149,82 @@ func (c *Client) doRawRequest(ctx context.Context, method, path string) ([]byte,
 	return body, nil
 }
 
+func (c *Client) doFormRequest(ctx context.Context, method, path string, params url.Values, result interface{}) error {
+	var reqBody io.Reader
+	if params != nil {
+		reqBody = strings.NewReader(params.Encode())
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
+	if err != nil {
+		return err
+	}
+
+	c.setAuthHeader(req)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("GitCode API %s %s returned %d: %s", method, path, resp.StatusCode, string(respBody))
+	}
+
+	if result != nil && resp.StatusCode != http.StatusNoContent {
+		if err := json.Unmarshal(respBody, result); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (c *Client) doRawBodyRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+
+	c.setAuthHeader(req)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("GitCode API %s %s returned %d: %s", method, path, resp.StatusCode, string(respBody))
+	}
+
+	if result != nil && resp.StatusCode != http.StatusNoContent && len(respBody) > 0 {
+		if err := json.Unmarshal(respBody, result); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
@@ -154,11 +233,13 @@ func min(a, b int) int {
 }
 
 type User struct {
-	ID       int64  `json:"id"`
-	Login    string `json:"login"`
-	Name     string `json:"name"`
-	Email    string `json:"email"`
-	AvatarURL string `json:"avatar_url"`
+	ID        FlexString `json:"id"`
+	Login     string     `json:"login"`
+	Name      string     `json:"name"`
+	Email     string     `json:"email"`
+	AvatarURL string     `json:"avatar_url"`
+	HTMLURL   string     `json:"html_url,omitempty"`
+	Type      string     `json:"type,omitempty"`
 }
 
 func (c *Client) GetCurrentUser(ctx context.Context) (*User, error) {

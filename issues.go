@@ -2,8 +2,11 @@ package gitcode
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -15,18 +18,19 @@ const (
 )
 
 type Issue struct {
-	ID        int64     `json:"id"`
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
+	ID        int64      `json:"id"`
+	Number    FlexInt    `json:"number"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
 	State     IssueState `json:"state"`
-	Author    *User     `json:"author"`
-	Assignees []*User   `json:"assignees"`
-	Labels    []*Label  `json:"labels"`
+	User      *User      `json:"user"`
+	Author    *User      `json:"author"`
+	Assignees []*User    `json:"assignees"`
+	Labels    []*Label   `json:"labels"`
 	Milestone *Milestone `json:"milestone"`
-	HTMLURL   string    `json:"html_url"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	HTMLURL   string     `json:"html_url"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 	ClosedAt  *time.Time `json:"closed_at"`
 }
 
@@ -49,6 +53,7 @@ type Milestone struct {
 type IssueComment struct {
 	ID        int64     `json:"id"`
 	Body      string    `json:"body"`
+	User      *User     `json:"user"`
 	Author    *User     `json:"author"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -75,14 +80,36 @@ type CreateIssueOptions struct {
 	Labels    []string `json:"labels,omitempty"`
 }
 
+func (o CreateIssueOptions) MarshalJSON() ([]byte, error) {
+	type Alias CreateIssueOptions
+	a := Alias(o)
+	raw, err := json.Marshal(a)
+	if err != nil {
+		return nil, err
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, err
+	}
+	if labels, ok := m["labels"].([]interface{}); ok {
+		parts := make([]string, len(labels))
+		for i, l := range labels {
+			parts[i] = fmt.Sprint(l)
+		}
+		m["labels"] = strings.Join(parts, ",")
+	}
+	return json.Marshal(m)
+}
+
 type UpdateIssueOptions struct {
-	Title     string   `json:"title,omitempty"`
-	Body      string   `json:"body,omitempty"`
-	State     IssueState `json:"state,omitempty"`
-	Assignee  string   `json:"assignee,omitempty"`
-	Assignees []string `json:"assignees,omitempty"`
-	Milestone int64    `json:"milestone,omitempty"`
-	Labels    []string `json:"labels,omitempty"`
+	Title      string     `json:"title,omitempty"`
+	Body       string     `json:"body,omitempty"`
+	State      IssueState `json:"state,omitempty"`
+	StateEvent string     `json:"state_event,omitempty"`
+	Assignee   string     `json:"assignee,omitempty"`
+	Assignees  []string   `json:"assignees,omitempty"`
+	Milestone  int64      `json:"milestone,omitempty"`
+	Labels     []string   `json:"labels,omitempty"`
 }
 
 func (c *Client) ListIssues(ctx context.Context, owner, repo string, opts ListIssuesOptions) ([]*Issue, error) {
@@ -147,11 +174,25 @@ func (c *Client) UpdateIssue(ctx context.Context, owner, repo string, number int
 }
 
 func (c *Client) CloseIssue(ctx context.Context, owner, repo string, number int) (*Issue, error) {
-	return c.UpdateIssue(ctx, owner, repo, number, UpdateIssueOptions{State: IssueStateClosed})
+	issue, err := c.GetIssue(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	return c.UpdateIssue(ctx, owner, repo, number, UpdateIssueOptions{
+		Title:      issue.Title,
+		StateEvent: "close",
+	})
 }
 
 func (c *Client) ReopenIssue(ctx context.Context, owner, repo string, number int) (*Issue, error) {
-	return c.UpdateIssue(ctx, owner, repo, number, UpdateIssueOptions{State: IssueStateOpen})
+	issue, err := c.GetIssue(ctx, owner, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	return c.UpdateIssue(ctx, owner, repo, number, UpdateIssueOptions{
+		Title:      issue.Title,
+		StateEvent: "reopen",
+	})
 }
 
 func (c *Client) ListIssueComments(ctx context.Context, owner, repo string, number int) ([]*IssueComment, error) {
@@ -196,7 +237,8 @@ func (c *Client) ListIssueLabels(ctx context.Context, owner, repo string) ([]*La
 
 func (c *Client) CreateIssueLabel(ctx context.Context, owner, repo string, name, color string) (*Label, error) {
 	var label Label
-	err := c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/labels", owner, repo), map[string]string{"name": name, "color": color}, &label)
+	params := url.Values{"name": {name}, "color": {"#" + strings.TrimPrefix(color, "#")}}
+	err := c.doFormRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/labels", owner, repo), params, &label)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +250,7 @@ func (c *Client) DeleteIssueLabel(ctx context.Context, owner, repo string, name 
 }
 
 func (c *Client) AddIssueLabels(ctx context.Context, owner, repo string, number int, labels []string) error {
-	return c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, number), map[string][]string{"labels": labels}, nil)
+	return c.doRawBodyRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, number), labels, nil)
 }
 
 func (c *Client) RemoveIssueLabel(ctx context.Context, owner, repo string, number int, name string) error {
@@ -216,21 +258,11 @@ func (c *Client) RemoveIssueLabel(ctx context.Context, owner, repo string, numbe
 }
 
 func (c *Client) ListMilestones(ctx context.Context, owner, repo string) ([]*Milestone, error) {
-	var milestones []*Milestone
-	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/%s/milestones", owner, repo), nil, &milestones)
-	if err != nil {
-		return nil, err
-	}
-	return milestones, nil
+	return c.ListMilestonesWithOptions(ctx, owner, repo, ListMilestonesOptions{})
 }
 
 func (c *Client) CreateMilestone(ctx context.Context, owner, repo string, title, description string) (*Milestone, error) {
-	var milestone Milestone
-	err := c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/milestones", owner, repo), map[string]string{"title": title, "description": description}, &milestone)
-	if err != nil {
-		return nil, err
-	}
-	return &milestone, nil
+	return c.CreateMilestoneWithOptions(ctx, owner, repo, CreateMilestoneOptions{Title: title, Description: description})
 }
 
 func (c *Client) DeleteMilestone(ctx context.Context, owner, repo string, number int) error {
