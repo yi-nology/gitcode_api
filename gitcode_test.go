@@ -1049,7 +1049,7 @@ func TestNotifications(t *testing.T) {
 
 	_, err := client.ListNotifications(ctx)
 	if err != nil {
-		t.Skipf("ListNotifications not available: %v", err)
+		t.Skipf("ListNotifications not available (GitCode API does not support /notifications): %v", err)
 	}
 }
 
