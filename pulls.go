@@ -69,9 +69,19 @@ type PullRequestComment struct {
 	Author    *User      `json:"author"`
 	Path      string     `json:"path"`
 	Position  int        `json:"position"`
+	Line      int        `json:"line"`
+	Side      string     `json:"side"`
 	CommitID  string     `json:"commit_id"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
+}
+
+type CreatePullRequestInlineCommentOptions struct {
+	Body     string `json:"body"`
+	Path     string `json:"path"`
+	Line     int    `json:"line"`
+	Side     string `json:"side"`
+	CommitID string `json:"commit_id,omitempty"`
 }
 
 type PullRequestReview struct {
@@ -239,6 +249,15 @@ func (c *Client) CreatePullRequestComment(ctx context.Context, owner, repo strin
 		"position":  position,
 		"commit_id": commitID,
 	}, &comment)
+	if err != nil {
+		return nil, err
+	}
+	return &comment, nil
+}
+
+func (c *Client) CreatePullRequestInlineComment(ctx context.Context, owner, repo string, number int, opts CreatePullRequestInlineCommentOptions) (*PullRequestComment, error) {
+	var comment PullRequestComment
+	err := c.doRequest(ctx, http.MethodPost, fmt.Sprintf("/repos/%s/%s/pulls/%d/comments", owner, repo, number), opts, &comment)
 	if err != nil {
 		return nil, err
 	}
