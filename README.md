@@ -8,13 +8,14 @@ Go 语言的 [GitCode](https://gitcode.com) / AtomGit API 客户端库,提供对
 ## 功能特性
 
 - **认证** — Bearer Token / PRIVATE-TOKEN Header / `access_token` Query 三种鉴权 + OAuth 2.0 授权码流程
-- **仓库** — 创建/更新/删除/Fork/归档/转让,组织仓库,文件 CRUD,Tree/Blob,Raw,文件&图片上传
-- **Issue** — 仓库 Issue CRUD、评论、标签、里程碑、操作日志、关联 PR、时间线、订阅者、依赖关系;用户/组织/企业级 Issue 查询
-- **Pull Request** — CRUD、合并、文件/提交/评论/审查、标签、审查人/测试人分配、操作日志、关联 Issue、Diff/Patch
+- **仓库** — 创建/更新/删除/Fork/归档/转让,组织仓库,文件 CRUD,Tree/Blob,Raw,文件&图片上传,Fork 同步,远程镜像,许可协议,CLA
+- **Issue** — 仓库 Issue CRUD、评论、标签、里程碑、操作日志、关联 PR、时间线、订阅者、依赖关系、关联分支、看板字段、修改历史;用户/组织/企业级 Issue 查询
+- **Pull Request** — CRUD、合并、文件/提交/评论/审查、标签、审查人/测试人分配、操作日志、关联 Issue、Diff/Patch、讨论回复、检视意见、修改历史
+- **讨论** — 仓库/组织级讨论、评论、回复
 - **分支** — 列表/创建/删除,保护分支规则,提交比较,提交历史
 - **Webhook** — CRUD、测试推送,Push/TagPull/Issue/PullRequest/Note 事件解析
-- **用户** — 当前用户/指定用户、SSH 公钥、邮箱、动态、Star 仓库、Namespace、关注/取关
-- **组织 / 企业** — 组织信息/成员/关注者/公开成员/屏蔽用户,企业成员、企业 Issue/PR、Issue 扩展状态、企业标签
+- **用户** — 当前用户/指定用户、SSH 公钥、邮箱、动态、Star/Watch 仓库、Namespace、关注/取关、更新资料、用户 PR 列表
+- **组织 / 企业** — 组织信息/成员/关注者/公开成员/屏蔽用户,企业成员、企业 Issue/PR、Issue 扩展状态、企业标签、组织自定义角色、组织讨论
 - **组织团队** — 团队 CRUD、成员管理、仓库关联
 - **组织 Webhook** — 组织级 Webhook CRUD
 - **组织标签** — 组织级标签 CRUD
@@ -47,7 +48,7 @@ Go 语言的 [GitCode](https://gitcode.com) / AtomGit API 客户端库,提供对
 go get github.com/yi-nology/gitcode_api@latest
 ```
 
-当前最新版本为 `v0.2.0`,完整版本历史见 [releases](https://github.com/yi-nology/gitcode_api/releases)。
+当前最新版本为 `v0.4.0`,完整版本历史见 [releases](https://github.com/yi-nology/gitcode_api/releases)。
 
 ## 快速开始
 
@@ -210,6 +211,40 @@ client.AddRepositoryTopic(ctx, "owner", "repo", "new-topic")
 client.DeleteRepositoryTopic(ctx, "owner", "repo", "old-topic")
 ```
 
+### Fork 同步 / 远程镜像 / 许可协议 / CLA
+
+```go
+// Fork 同步
+syncStatus, _ := client.GetForkSyncStatus(ctx, "owner", "fork-repo")
+fmt.Printf("behind=%d ahead=%d\n", syncStatus.BehindBy, syncStatus.AheadBy)
+client.SyncForkRepository(ctx, "owner", "fork-repo") // 同步源仓库
+
+// 远程镜像
+mirror, _ := client.GetRepoRemoteMirror(ctx, "owner", "repo")
+mirrors, _ := client.ListPushRemoteMirrors(ctx, "owner", "repo", gitcode.ListOptions{})
+
+// 许可协议
+license, _ := client.GetRepoLicense(ctx, "owner", "repo")
+
+// CLA
+clas, _ := client.ListRepoCLAs(ctx, "owner", "repo")
+client.ConfigureRepoCLA(ctx, "owner", "repo", &gitcode.RepoCLA{Name: "CLA", Content: "...", Enabled: true})
+```
+
+### 讨论 (Discussions)
+
+```go
+// 仓库讨论
+discussions, _ := client.ListDiscussions(ctx, "owner", "repo", gitcode.ListOptions{})
+discussion, _  := client.GetDiscussion(ctx, "owner", "repo", 1)
+comments, _    := client.ListDiscussionComments(ctx, "owner", "repo", 1, gitcode.ListOptions{})
+replies, _     := client.ListDiscussionCommentReplies(ctx, "owner", "repo", 1, commentID, gitcode.ListOptions{})
+
+// 组织讨论
+orgDiscussions, _ := client.ListOrgDiscussions(ctx, "my-org", gitcode.ListOptions{})
+orgDiscussion, _  := client.GetOrgDiscussion(ctx, "my-org", 1)
+```
+
 ### 协作者
 
 ```go
@@ -298,6 +333,22 @@ client.DeleteIssueDependency(ctx, "owner", "repo", int(issue.Number), 42)
 assignees, _ := client.ListRepoAssignees(ctx, "owner", "repo", gitcode.ListOptions{})
 client.AddIssueAssignees(ctx, "owner", "repo", int(issue.Number), []string{"user1", "user2"})
 client.RemoveIssueAssignees(ctx, "owner", "repo", int(issue.Number), []string{"user1"})
+
+// 关联分支
+branches, _ := client.ListIssueRelatedBranches(ctx, "owner", "repo", int(issue.Number))
+client.SetIssueRelatedBranches(ctx, "owner", "repo", int(issue.Number), []string{"feature-branch"})
+
+// 看板字段
+client.UpdateIssueKanbanValues(ctx, "owner", "repo", int(issue.Number), []gitcode.KanbanValue{
+    {FieldID: 1, FieldName: "priority", ValueID: 2, ValueName: "high"},
+})
+
+// 修改历史
+history, _ := client.ListIssueModifyHistory(ctx, "owner", "repo", int(issue.Number), gitcode.ListOptions{})
+commentHistory, _ := client.ListIssueCommentModifyHistory(ctx, "owner", "repo", commentID, gitcode.ListOptions{})
+
+// 企业 Issue 状态
+statuses, _ := client.ListEnterpriseIssueStatuses(ctx, "my-enterprise")
 ```
 
 ### Issue 表情回应 (Reactions)
@@ -363,6 +414,36 @@ client.DismissPullRequestReview(ctx, "owner", "repo", pr.Number, reviewID, "Dism
 
 // PR 表情回应
 client.CreatePullRequestCommentReaction(ctx, "owner", "repo", commentID, gitcode.ReactionHooray)
+
+// PR 关联/取消关联 Issue
+client.LinkPullRequestIssue(ctx, "owner", "repo", pr.Number, 42)
+client.UnlinkPullRequestIssue(ctx, "owner", "repo", pr.Number, 42)
+
+// 取消测试人/审查人
+client.UnassignPullRequestTesters(ctx, "owner", "repo", pr.Number, "qa1")
+client.UnassignPullRequestReviewers(ctx, "owner", "repo", pr.Number, "user1")
+
+// 可选测试人/审查人列表
+availableTesters, _ := client.ListPullRequestAvailableTesters(ctx, "owner", "repo", pr.Number, gitcode.ListOptions{})
+availableReviewers, _ := client.ListPullRequestAvailableReviewers(ctx, "owner", "repo", pr.Number, gitcode.ListOptions{})
+
+// 评审人 (approval-reviewers)
+client.AssignPullRequestApprovalReviewers(ctx, "owner", "repo", pr.Number, "reviewer1,reviewer2")
+client.UnassignPullRequestApprovalReviewers(ctx, "owner", "repo", pr.Number, "reviewer1")
+
+// 讨论回复 / 检视意见
+client.ReplyPullRequestComment(ctx, "owner", "repo", pr.Number, "discussion-id", "Reply body")
+client.ResolvePullRequestDiscussion(ctx, "owner", "repo", pr.Number, "discussion-id", true)
+
+// 修改历史
+prHistory, _ := client.ListPullRequestModifyHistory(ctx, "owner", "repo", pr.Number, gitcode.ListOptions{})
+prCommentHistory, _ := client.ListPullRequestCommentModifyHistory(ctx, "owner", "repo", commentID, gitcode.ListOptions{})
+
+// 刷新评论位置
+client.RefreshPullRequestCommentPosition(ctx, "owner", "repo", pr.Number)
+
+// 文件变更 JSON
+fileChanges, _ := client.ListPullRequestFilesJSON(ctx, "owner", "repo", pr.Number, gitcode.ListOptions{})
 ```
 
 ### Commit Status (CI/CD 集成)
@@ -539,6 +620,20 @@ client.DeleteSSHKey(ctx, key.ID)
 events, _ := client.GetUserEvents(ctx, me.Login, "2025", "") // 年度动态
 starred, _ := client.ListStarredRepositories(ctx, gitcode.ListStarredReposOptions{})
 ns, _      := client.GetNamespace(ctx, "somepath")
+
+// Watch 了的仓库
+watched, _ := client.ListUserWatchedRepositories(ctx, "username", gitcode.ListOptions{})
+myWatched, _ := client.ListCurrentUserWatchedRepositories(ctx, gitcode.ListOptions{})
+
+// 更新个人资料
+client.UpdateCurrentUser(ctx, gitcode.UpdateCurrentUserOptions{
+    Name: "New Name", Bio: "Go developer",
+})
+
+// 用户 PR 列表
+myPRs, _ := client.ListUserPullRequests(ctx, gitcode.ListPullRequestsOptions{
+    State: gitcode.PullRequestStateOpen,
+})
 ```
 
 ### 用户关注
@@ -596,6 +691,9 @@ blocked, _ := client.ListOrgBlockedUsers(ctx, "my-org", gitcode.ListOptions{})
 client.BlockOrgUser(ctx, "my-org", "spammer")
 client.UnblockOrgUser(ctx, "my-org", "spammer")
 isBlocked, _ := client.IsOrgBlockedUser(ctx, "my-org", "spammer")
+
+// 组织自定义角色
+roles, _ := client.ListOrgCustomizedRoles(ctx, "my-org")
 ```
 
 ### 组织团队
@@ -841,15 +939,20 @@ gitcode_api/
 ├── repos_assignees.go          # 指派人管理
 ├── repos_reviewers.go          # PR 审查人、Diff、Patch
 ├── repos_issues_timeline.go    # Issue 时间线、订阅者、依赖关系
+├── repos_discussions.go        # 仓库讨论、评论、回复 / Fork 同步 / 远程镜像 / 许可协议 / CLA
 ├── issues.go                   # Issue CRUD / 评论 / 标签 / 里程碑
+├── issues_enhanced.go          # Issue 关联分支 / 看板字段 / 修改历史 / 企业状态 / 表态
 ├── enterprise_issues.go        # 用户 / 组织 / 企业级 Issue、操作日志、关联 PR
 ├── pulls.go                    # Pull Request 全套 + 审查 / 测试 / 标签 / 企业 PR
+├── pulls_enhanced.go           # PR 关联 Issue / 测试人管理 / 评审人 / 讨论回复 / 修改历史 / 表态
 ├── branches.go                 # 分支 / 保护分支 / 提交 / 比较
 ├── webhooks.go                 # Webhook CRUD + 5 类事件解析
 ├── search.go                   # 搜索仓库 / Issue / 用户
 ├── users.go                    # SSH 公钥 / 邮箱 / 动态 / Star / Namespace
+├── users_enhanced.go           # Watch 仓库 / 更新资料 / 用户 PR 列表
 ├── user_followers.go           # 用户关注 / 取关
 ├── orgs.go                     # 组织 / 企业成员管理 / Issue 扩展配置
+├── orgs_enhanced.go            # 组织自定义角色 / 组织讨论
 ├── org_teams.go                # 组织团队 CRUD / 成员 / 仓库
 ├── org_hooks.go                # 组织 Webhook CRUD
 ├── org_labels.go               # 组织标签 CRUD
@@ -868,17 +971,21 @@ gitcode_api/
 
 ## API 覆盖率
 
-本库覆盖了 GitCode API 的绝大部分功能,包括但不限于:
+本库覆盖了 GitCode 官方文档 ([docs.gitcode.com/docs/apis](https://docs.gitcode.com/docs/apis/)) 中的绝大部分 API:
 
 | 模块 | API 数量 | 状态 |
 |---|---|---|
-| 认证 & 用户 | 15+ | ✅ 完整 |
-| 仓库 CRUD & 文件 | 30+ | ✅ 完整 |
-| Issue / 标签 / 里程碑 | 25+ | ✅ 完整 |
-| Pull Request | 30+ | ✅ 完整 |
+| 认证 & 用户 | 20+ | ✅ 完整 |
+| 仓库 CRUD & 文件 | 40+ | ✅ 完整 |
+| 讨论 (Discussions) | 10 | ✅ 完整 |
+| Fork 同步 / 远程镜像 / CLA | 7 | ✅ 完整 |
+| Issue / 标签 / 里程碑 | 30+ | ✅ 完整 |
+| Issue 增强 (分支/看板/历史) | 8 | ✅ 完整 |
+| Pull Request | 40+ | ✅ 完整 |
+| PR 增强 (关联/评审/讨论/历史) | 15 | ✅ 完整 |
 | 分支 & 提交 | 15+ | ✅ 完整 |
 | Webhook | 5 CRUD + 5 解析 | ✅ 完整 |
-| 组织 / 企业 | 20+ | ✅ 完整 |
+| 组织 / 企业 | 25+ | ✅ 完整 |
 | 组织团队 | 12 | ✅ 完整 |
 | 搜索 | 3 | ✅ 完整 |
 | 协作者 | 5 | ✅ 完整 |
@@ -890,7 +997,7 @@ gitcode_api/
 | Wiki | 5 | ✅ 完整 |
 | 通知 | 6 | ✅ 完整 |
 | 模板 | 7 | ✅ 完整 |
-| **总计** | **200+** | ✅ |
+| **总计** | **370+** | ✅ |
 
 ## 测试
 
