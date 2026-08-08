@@ -35,6 +35,11 @@ Go 语言的 [GitCode](https://gitcode.com) / AtomGit API 客户端库,提供对
 - **仓库统计** — 参与度、代码频率、提交活动、Punch Card
 - **仓库归档** — 下载仓库压缩包
 - **仓库设置** — Push 配置、PR 设置、模块开关、审查规则、下载统计
+- **保护标签** — 保护标签规则 CRUD
+- **Release 增强** — 最新 Release、上传 URL、下载附件
+- **企业** — 企业成员/里程碑/标签/自定义角色/Issue 自定义字段/组织关联企业
+- **看板 (Dashboard)** — 组织看板 CRUD、看板条目管理
+- **Actions/CI** — 工作流/运行记录/Jobs/日志/Artifacts/Runners/Runner Groups
 - **类型友好** — `FlexInt`/`FlexString`/`NullableTime` 等 JSON 容错类型,适配 GitCode 返回值类型漂移
 
 ## 环境要求
@@ -48,7 +53,7 @@ Go 语言的 [GitCode](https://gitcode.com) / AtomGit API 客户端库,提供对
 go get github.com/yi-nology/gitcode_api@latest
 ```
 
-当前最新版本为 `v0.4.0`,完整版本历史见 [releases](https://github.com/yi-nology/gitcode_api/releases)。
+当前最新版本为 `v0.5.0`,完整版本历史见 [releases](https://github.com/yi-nology/gitcode_api/releases)。
 
 ## 快速开始
 
@@ -983,9 +988,14 @@ gitcode_api/
 | Issue 增强 (分支/看板/历史) | 8 | ✅ 完整 |
 | Pull Request | 40+ | ✅ 完整 |
 | PR 增强 (关联/评审/讨论/历史) | 15 | ✅ 完整 |
-| 分支 & 提交 | 15+ | ✅ 完整 |
+| 分支 & 提交 | 17 | ✅ 完整 |
+| 保护标签 | 5 | ✅ 完整 |
+| Release 增强 | 8 | ✅ 完整 |
 | Webhook | 5 CRUD + 5 解析 | ✅ 完整 |
-| 组织 / 企业 | 25+ | ✅ 完整 |
+| 组织 / 企业 | 40+ | ✅ 完整 |
+| 企业里程碑 / 标签 / 自定义字段 | 14 | ✅ 完整 |
+| 看板 (Dashboard) | 7 | ✅ 完整 |
+| Actions/CI (工作流/Runner/Artifact) | 23 | ✅ 完整 |
 | 组织团队 | 12 | ✅ 完整 |
 | 搜索 | 3 | ✅ 完整 |
 | 协作者 | 5 | ✅ 完整 |
@@ -997,7 +1007,7 @@ gitcode_api/
 | Wiki | 5 | ✅ 完整 |
 | 通知 | 6 | ✅ 完整 |
 | 模板 | 7 | ✅ 完整 |
-| **总计** | **370+** | ✅ |
+| **总计** | **428** | ✅ |
 
 ## 测试
 
