@@ -4,11 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
+	"time"
 
 	gitcode "github.com/yi-nology/gitcode_api"
 )
 
 func main() {
+	// ============================================================
+	// 1. 基础用法
+	// ============================================================
 	client := gitcode.NewClient("your-gitcode-token")
 	ctx := context.Background()
 
@@ -19,68 +24,201 @@ func main() {
 	}
 	fmt.Printf("当前用户: %s (%s)\n", user.Name, user.Login)
 
-	// 列出仓库
-	repos, err := client.ListRepositories(ctx, gitcode.ListRepositoriesOptions{
-		ListOptions: gitcode.ListOptions{Page: 1, PerPage: 10},
+	// ============================================================
+	// 2. 认证方式切换
+	// ============================================================
+	client.SetAuthStyle(gitcode.AuthStylePrivateToken) // PRIVATE-TOKEN Header
+	client.SetAuthStyle(gitcode.AuthStyleAccessToken)  // access_token Query
+	client.SetAuthStyle(gitcode.AuthStyleBearer)       // Bearer (默认)
+
+	// ============================================================
+	// 3. 自定义 HTTP 客户端 & 超时
+	// ============================================================
+	client.SetHTTPClient(&http.Client{Timeout: 60 * time.Second})
+
+	// 私有部署
+	// client := gitcode.NewClientWithBaseURL("https://your-gitcode.com/api/v5", "token")
+
+	// ============================================================
+	// 4. Rate Limit 重试策略
+	// ============================================================
+	client.SetRetryPolicy(gitcode.RetryPolicy{
+		MaxRetries:           3,
+		InitialBackoff:       1 * time.Second,
+		MaxBackoff:           30 * time.Second,
+		Multiplier:           2.0,
+		RetryableStatusCodes: []int{429, 500, 502, 503, 504},
+	})
+
+	// ============================================================
+	// 5. 请求/响应中间件 (Hooks)
+	// ============================================================
+	client.AddRequestHook(func(req *http.Request) error {
+		fmt.Printf("[REQ] %s %s\n", req.Method, req.URL.Path)
+		return nil
+	})
+
+	client.AddResponseHook(func(resp *http.Response) error {
+		fmt.Printf("[RESP] %d %s\n", resp.StatusCode, resp.Request.URL.Path)
+		return nil
+	})
+
+	// ============================================================
+	// 6. 结构化错误处理
+	// ============================================================
+	_, err = client.GetRepository(ctx, "owner", "nonexistent")
+	if err != nil {
+		if gitcode.IsNotFound(err) {
+			fmt.Println("仓库不存在")
+		} else if gitcode.IsUnauthorized(err) {
+			fmt.Println("认证失败，请检查 Token")
+		} else if gitcode.IsRateLimit(err) {
+			fmt.Println("触发限流，请稍后重试")
+		} else if gitcode.IsForbidden(err) {
+			fmt.Println("权限不足")
+		} else if gitcode.IsConflict(err) {
+			fmt.Println("资源已存在")
+		} else {
+			fmt.Printf("其他错误: %v\n", err)
+		}
+	}
+
+	// ============================================================
+	// 7. 自动分页遍历
+	// ============================================================
+	allIssues, err := gitcode.CollectAll(ctx, func(opts gitcode.ListOptions) ([]*gitcode.Issue, error) {
+		return client.ListIssues(ctx, "owner", "repo", gitcode.ListIssuesOptions{
+			ListOptions: opts,
+			State:       gitcode.IssueStateOpen,
+		})
 	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("\n仓库列表:\n")
-	for _, repo := range repos {
-		fmt.Printf("- %s (%s)\n", repo.FullName, repo.Description)
+	fmt.Printf("\n所有 Open Issues: %d 个\n", len(allIssues))
+
+	// 使用迭代器逐页处理
+	for items, err := range gitcode.Paginate(ctx, func(opts gitcode.ListOptions) ([]*gitcode.Repository, error) {
+		return client.ListRepositories(ctx, gitcode.ListRepositoriesOptions{ListOptions: opts})
+	}) {
+		if err != nil {
+			log.Fatal(err)
+		}
+		for _, repo := range items {
+			fmt.Printf("  - %s\n", repo.FullName)
+		}
 	}
 
-	// 获取单个仓库
-	repo, err := client.GetRepository(ctx, "owner", "repo")
+	// ============================================================
+	// 8. Webhook 签名验证
+	// ============================================================
+	// 在 HTTP handler 中使用:
+	// func handleWebhook(w http.ResponseWriter, r *http.Request) {
+	//     payload, _ := io.ReadAll(r.Body)
+	//     signature := r.Header.Get("X-Gitcode-Signature")
+	//     if !gitcode.VerifyWebhookSignature(payload, "your-webhook-secret", signature) {
+	//         http.Error(w, "Invalid signature", http.StatusUnauthorized)
+	//         return
+	//     }
+	//     event, _ := client.ParsePushEvent(payload)
+	//     fmt.Printf("Push to %s\n", event.Ref)
+	// }
+
+	// 计算签名 (用于测试)
+	sig := gitcode.ComputeWebhookSignature([]byte("payload"), "secret")
+	fmt.Printf("\nWebhook 签名: %s\n", sig)
+
+	// ============================================================
+	// 9. 文件上传 (Multipart)
+	// ============================================================
+	// 上传文件内容
+	result, err := client.UploadFileBytes(ctx, "owner", "repo", "hello.txt", []byte("Hello World"))
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("上传失败: %v\n", err)
+	} else {
+		fmt.Printf("上传成功: %s\n", result.FilePath)
 	}
-	fmt.Printf("\n仓库详情: %s\n", repo.FullName)
-	fmt.Printf("  描述: %s\n", repo.Description)
-	fmt.Printf("  Stars: %d\n", repo.StarsCount)
 
-	// 列出分支
-	branches, err := client.ListBranches(ctx, "owner", "repo")
+	// ============================================================
+	// 10. OAuth 2.0 流程
+	// ============================================================
+	oauth := gitcode.NewOAuthClient("client-id", "client-secret", "https://app.example.com/callback")
+
+	// 1. 生成授权 URL
+	authURL := oauth.AuthorizeURL("user_info projects", "random-state")
+	fmt.Printf("\n请访问: %s\n", authURL)
+
+	// 2. 用 code 换 token (在回调 handler 中)
+	// token, err := oauth.ExchangeToken(ctx, code)
+	// if err != nil { log.Fatal(err) }
+
+	// 3. 用 token 创建客户端
+	// client := gitcode.NewClientFromOAuthToken(token)
+
+	// 4. 刷新 token
+	// token, err = oauth.RefreshToken(ctx, token.RefreshToken)
+
+	// ============================================================
+	// 11. Actions/CI 示例
+	// ============================================================
+	workflows, err := client.ListActionWorkflows(ctx, "owner", "repo", gitcode.ListOptions{})
 	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("\n分支列表:\n")
-	for _, branch := range branches {
-		fmt.Printf("- %s\n", branch.Name)
+		fmt.Printf("获取工作流失败: %v\n", err)
+	} else {
+		fmt.Printf("\n工作流列表: %d 个\n", len(workflows))
+		for _, wf := range workflows {
+			fmt.Printf("  - %s (%s)\n", wf.Name, wf.State)
+		}
 	}
 
-	// 列出 Issue
-	issues, err := client.ListIssues(ctx, "owner", "repo", gitcode.ListIssuesOptions{
-		State: gitcode.IssueStateOpen,
+	// 获取运行记录
+	runs, err := client.ListActionRuns(ctx, "owner", "repo", gitcode.ListActionRunsOptions{
+		ListOptions: gitcode.ListOptions{PerPage: 5},
+		Status:      "completed",
 	})
 	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("\nIssue 列表:\n")
-	for _, issue := range issues {
-		fmt.Printf("#%d: %s\n", int(issue.Number), issue.Title)
-	}
-
-	// 列出 Pull Request
-	prs, err := client.ListPullRequests(ctx, "owner", "repo", gitcode.ListPullRequestsOptions{
-		State: gitcode.PullRequestStateOpen,
-	})
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Printf("\nPull Request 列表:\n")
-	for _, pr := range prs {
-		fmt.Printf("#%d: %s\n", pr.Number, pr.Title)
+		fmt.Printf("获取运行记录失败: %v\n", err)
+	} else {
+		fmt.Printf("\n最近运行记录: %d 个\n", len(runs))
+		for _, run := range runs {
+			fmt.Printf("  - #%d %s (%s)\n", run.ID, run.Name, run.Conclusion)
+		}
 	}
 
-	// 列出 Webhook
-	hooks, err := client.ListWebhooks(ctx, "owner", "repo")
+	// ============================================================
+	// 12. 企业 API 示例
+	// ============================================================
+	enterprise := "my-enterprise"
+
+	// 企业里程碑
+	milestones, err := client.ListEnterpriseMilestones(ctx, enterprise, gitcode.ListMilestonesOptions{})
 	if err != nil {
-		log.Fatal(err)
+		fmt.Printf("获取企业里程碑失败: %v\n", err)
+	} else {
+		fmt.Printf("\n企业里程碑: %d 个\n", len(milestones))
 	}
-	fmt.Printf("\nWebhook 列表:\n")
-	for _, hook := range hooks {
-		fmt.Printf("- %s (active: %v)\n", hook.URL, hook.Active)
+
+	// 企业自定义角色
+	roles, err := client.ListEnterpriseCustomizedRoles(ctx, enterprise)
+	if err != nil {
+		fmt.Printf("获取企业角色失败: %v\n", err)
+	} else {
+		fmt.Printf("\n企业自定义角色: %d 个\n", len(roles))
 	}
+
+	// ============================================================
+	// 13. 看板 API 示例
+	// ============================================================
+	org := "my-org"
+	boards, err := client.ListKanbanBoards(ctx, org, gitcode.ListOptions{})
+	if err != nil {
+		fmt.Printf("获取看板失败: %v\n", err)
+	} else {
+		fmt.Printf("\n看板列表: %d 个\n", len(boards))
+		for _, board := range boards {
+			fmt.Printf("  - %s (ID: %d)\n", board.Name, board.ID)
+		}
+	}
+
+	fmt.Println("\n示例完成！")
 }

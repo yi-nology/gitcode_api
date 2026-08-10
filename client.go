@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -16,21 +17,35 @@ const (
 	DefaultBaseURL = "https://api.gitcode.com/api/v5"
 )
 
+// Client is the GitCode API client.
 type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
 	authStyle  AuthStyle
+	mu         sync.RWMutex
+
+	// Retry policy for failed requests.
+	retryPolicy *RetryPolicy
+
+	// Request/response hooks for middleware.
+	requestHooks  []RequestHook
+	responseHooks []ResponseHook
 }
 
+// AuthStyle defines how authentication tokens are sent.
 type AuthStyle int
 
 const (
+	// AuthStyleBearer sends "Authorization: Bearer <token>" header.
 	AuthStyleBearer AuthStyle = iota
+	// AuthStylePrivateToken sends "PRIVATE-TOKEN: <token>" header.
 	AuthStylePrivateToken
+	// AuthStyleAccessToken sends "?access_token=<token>" query parameter.
 	AuthStyleAccessToken
 )
 
+// NewClient creates a new GitCode API client with the given token.
 func NewClient(token string) *Client {
 	return &Client{
 		baseURL: DefaultBaseURL,
@@ -42,6 +57,7 @@ func NewClient(token string) *Client {
 	}
 }
 
+// NewClientWithBaseURL creates a new GitCode API client with a custom base URL.
 func NewClientWithBaseURL(baseURL, token string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
@@ -53,32 +69,46 @@ func NewClientWithBaseURL(baseURL, token string) *Client {
 	}
 }
 
+// SetAuthStyle sets the authentication style for the client.
 func (c *Client) SetAuthStyle(style AuthStyle) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.authStyle = style
 }
 
+// SetHTTPClient sets a custom HTTP client.
 func (c *Client) SetHTTPClient(client *http.Client) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.httpClient = client
 }
 
+// setAuthHeader sets the authentication header on the request.
 func (c *Client) setAuthHeader(req *http.Request) {
-	switch c.authStyle {
+	c.mu.RLock()
+	style := c.authStyle
+	token := c.token
+	c.mu.RUnlock()
+
+	switch style {
 	case AuthStylePrivateToken:
-		req.Header.Set("PRIVATE-TOKEN", c.token)
+		req.Header.Set("PRIVATE-TOKEN", token)
 	case AuthStyleAccessToken:
 		q := req.URL.Query()
-		q.Set("access_token", c.token)
+		q.Set("access_token", token)
 		req.URL.RawQuery = q.Encode()
 	default:
-		req.Header.Set("Authorization", "Bearer "+c.token)
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 }
 
+// doRequest executes an HTTP request and unmarshals the result.
 func (c *Client) doRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
 	_, err := c.doRequestWithHeaders(ctx, method, path, body, result)
 	return err
 }
 
+// doRequestWithHeaders executes an HTTP request and returns the response headers.
 func (c *Client) doRequestWithHeaders(ctx context.Context, method, path string, body interface{}, result interface{}) (http.Header, error) {
 	var reqBody io.Reader
 	if body != nil {
@@ -97,11 +127,22 @@ func (c *Client) doRequestWithHeaders(ctx context.Context, method, path string, 
 	c.setAuthHeader(req)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	// Run request hooks
+	if err := c.runRequestHooks(req); err != nil {
+		return nil, fmt.Errorf("request hook error: %w", err)
+	}
+
+	// Execute request with retry
+	resp, err := c.doRequestWithRetry(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	// Run response hooks
+	if err := c.runResponseHooks(resp); err != nil {
+		return nil, fmt.Errorf("response hook error: %w", err)
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -109,7 +150,7 @@ func (c *Client) doRequestWithHeaders(ctx context.Context, method, path string, 
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("GitCode API %s %s returned %d: %s", method, path, resp.StatusCode, string(respBody))
+		return nil, newAPIError(method, path, resp.StatusCode, string(respBody))
 	}
 
 	if result != nil && resp.StatusCode != http.StatusNoContent {
@@ -123,6 +164,7 @@ func (c *Client) doRequestWithHeaders(ctx context.Context, method, path string, 
 	return resp.Header, nil
 }
 
+// doRawRequest executes a raw HTTP request and returns the response body.
 func (c *Client) doRawRequest(ctx context.Context, method, path string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
 	if err != nil {
@@ -131,11 +173,22 @@ func (c *Client) doRawRequest(ctx context.Context, method, path string) ([]byte,
 
 	c.setAuthHeader(req)
 
-	resp, err := c.httpClient.Do(req)
+	// Run request hooks
+	if err := c.runRequestHooks(req); err != nil {
+		return nil, fmt.Errorf("request hook error: %w", err)
+	}
+
+	// Execute request with retry
+	resp, err := c.doRequestWithRetry(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	// Run response hooks
+	if err := c.runResponseHooks(resp); err != nil {
+		return nil, fmt.Errorf("response hook error: %w", err)
+	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -143,12 +196,13 @@ func (c *Client) doRawRequest(ctx context.Context, method, path string) ([]byte,
 	}
 
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("GitCode API %s %s returned %d: %s", method, path, resp.StatusCode, string(body[:min(len(body), 200)]))
+		return nil, newAPIError(method, path, resp.StatusCode, string(body[:min(len(body), 200)]))
 	}
 
 	return body, nil
 }
 
+// doFormRequest executes a form-encoded HTTP request.
 func (c *Client) doFormRequest(ctx context.Context, method, path string, params url.Values, result interface{}) error {
 	var reqBody io.Reader
 	if params != nil {
@@ -163,11 +217,22 @@ func (c *Client) doFormRequest(ctx context.Context, method, path string, params 
 	c.setAuthHeader(req)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := c.httpClient.Do(req)
+	// Run request hooks
+	if err := c.runRequestHooks(req); err != nil {
+		return fmt.Errorf("request hook error: %w", err)
+	}
+
+	// Execute request with retry
+	resp, err := c.doRequestWithRetry(ctx, req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	// Run response hooks
+	if err := c.runResponseHooks(resp); err != nil {
+		return fmt.Errorf("response hook error: %w", err)
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -175,7 +240,7 @@ func (c *Client) doFormRequest(ctx context.Context, method, path string, params 
 	}
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("GitCode API %s %s returned %d: %s", method, path, resp.StatusCode, string(respBody))
+		return newAPIError(method, path, resp.StatusCode, string(respBody))
 	}
 
 	if result != nil && resp.StatusCode != http.StatusNoContent {
@@ -187,6 +252,7 @@ func (c *Client) doFormRequest(ctx context.Context, method, path string, params 
 	return nil
 }
 
+// doRawBodyRequest executes an HTTP request with a raw JSON body.
 func (c *Client) doRawBodyRequest(ctx context.Context, method, path string, body interface{}, result interface{}) error {
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -201,11 +267,22 @@ func (c *Client) doRawBodyRequest(ctx context.Context, method, path string, body
 	c.setAuthHeader(req)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	// Run request hooks
+	if err := c.runRequestHooks(req); err != nil {
+		return fmt.Errorf("request hook error: %w", err)
+	}
+
+	// Execute request with retry
+	resp, err := c.doRequestWithRetry(ctx, req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+
+	// Run response hooks
+	if err := c.runResponseHooks(resp); err != nil {
+		return fmt.Errorf("response hook error: %w", err)
+	}
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -213,7 +290,7 @@ func (c *Client) doRawBodyRequest(ctx context.Context, method, path string, body
 	}
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("GitCode API %s %s returned %d: %s", method, path, resp.StatusCode, string(respBody))
+		return newAPIError(method, path, resp.StatusCode, string(respBody))
 	}
 
 	if result != nil && resp.StatusCode != http.StatusNoContent && len(respBody) > 0 {
@@ -234,7 +311,13 @@ func min(a, b int) int {
 
 // isNotFoundError checks if an error is a 404 Not Found response.
 func isNotFoundError(err error) bool {
-	return err != nil && len(err.Error()) > 0 && (contains(err.Error(), "404"))
+	if err == nil {
+		return false
+	}
+	if IsNotFound(err) {
+		return true
+	}
+	return contains(err.Error(), "404")
 }
 
 func contains(s, substr string) bool {
@@ -250,6 +333,7 @@ func searchString(s, substr string) bool {
 	return false
 }
 
+// User represents a GitCode user.
 type User struct {
 	ID        FlexString `json:"id"`
 	Login     string     `json:"login"`
@@ -260,6 +344,7 @@ type User struct {
 	Type      string     `json:"type,omitempty"`
 }
 
+// GetCurrentUser returns the authenticated user's profile.
 func (c *Client) GetCurrentUser(ctx context.Context) (*User, error) {
 	var user User
 	err := c.doRequest(ctx, http.MethodGet, "/user", nil, &user)
@@ -269,6 +354,7 @@ func (c *Client) GetCurrentUser(ctx context.Context) (*User, error) {
 	return &user, nil
 }
 
+// GetUser returns a user by username.
 func (c *Client) GetUser(ctx context.Context, username string) (*User, error) {
 	var user User
 	err := c.doRequest(ctx, http.MethodGet, fmt.Sprintf("/users/%s", username), nil, &user)
@@ -278,6 +364,7 @@ func (c *Client) GetUser(ctx context.Context, username string) (*User, error) {
 	return &user, nil
 }
 
+// ListOptions contains pagination parameters for list requests.
 type ListOptions struct {
 	Page    int `json:"page"`
 	PerPage int `json:"per_page"`
@@ -298,12 +385,14 @@ func (o ListOptions) toQuery() string {
 	return fmt.Sprintf("page=%d&per_page=%d", opts.Page, opts.PerPage)
 }
 
+// RateLimit contains rate limit information.
 type RateLimit struct {
 	Limit     int       `json:"limit"`
 	Remaining int       `json:"remaining"`
 	Reset     time.Time `json:"reset"`
 }
 
+// GetRateLimit returns the current rate limit status.
 func (c *Client) GetRateLimit(ctx context.Context) (*RateLimit, error) {
 	var rl RateLimit
 	err := c.doRequest(ctx, http.MethodGet, "/rate_limit", nil, &rl)

@@ -53,7 +53,7 @@ Go 语言的 [GitCode](https://gitcode.com) / AtomGit API 客户端库,提供对
 go get github.com/yi-nology/gitcode_api@latest
 ```
 
-当前最新版本为 `v0.5.0`,完整版本历史见 [releases](https://github.com/yi-nology/gitcode_api/releases)。
+当前最新版本为 `v0.6.0`,完整版本历史见 [releases](https://github.com/yi-nology/gitcode_api/releases)。
 
 ## 快速开始
 
@@ -891,6 +891,154 @@ client.TransferRepository(ctx, "owner", "repo", gitcode.TransferRepoOptions{NewO
 rl, _ := client.GetRateLimit(ctx)
 ```
 
+## 高级功能
+
+### 结构化错误处理
+
+所有 API 错误都返回结构化类型，可通过类型断言区分：
+
+```go
+_, err := client.GetRepository(ctx, "owner", "missing")
+if err != nil {
+    switch {
+    case gitcode.IsNotFound(err):
+        fmt.Println("仓库不存在")
+    case gitcode.IsUnauthorized(err):
+        fmt.Println("认证失败")
+    case gitcode.IsRateLimit(err):
+        fmt.Println("触发限流")
+    case gitcode.IsForbidden(err):
+        fmt.Println("权限不足")
+    case gitcode.IsConflict(err):
+        fmt.Println("资源已存在")
+    default:
+        fmt.Printf("其他错误: %v\n", err)
+    }
+}
+```
+
+### Rate Limit 自动重试
+
+配置自动重试策略，遇到 429/5xx 自动等待重试：
+
+```go
+client.SetRetryPolicy(gitcode.RetryPolicy{
+    MaxRetries:           3,
+    InitialBackoff:       1 * time.Second,
+    MaxBackoff:           30 * time.Second,
+    Multiplier:           2.0,
+    RetryableStatusCodes: []int{429, 500, 502, 503, 504},
+})
+```
+
+### 自动分页
+
+自动遍历所有分页，无需手动处理 `Page` 参数：
+
+```go
+// 收集所有结果到一个 slice
+allIssues, _ := gitcode.CollectAll(ctx, func(opts gitcode.ListOptions) ([]*gitcode.Issue, error) {
+    return client.ListIssues(ctx, "owner", "repo", gitcode.ListIssuesOptions{
+        ListOptions: opts,
+        State:       gitcode.IssueStateOpen,
+    })
+})
+
+// 使用迭代器逐页处理
+for items, err := range gitcode.Paginate(ctx, func(opts gitcode.ListOptions) ([]*gitcode.Repository, error) {
+    return client.ListRepositories(ctx, gitcode.ListRepositoriesOptions{ListOptions: opts})
+}) {
+    if err != nil { log.Fatal(err) }
+    for _, repo := range items {
+        fmt.Println(repo.FullName)
+    }
+}
+```
+
+### Webhook 签名验证
+
+验证 Webhook 请求的 HMAC-SHA256 签名：
+
+```go
+func handleWebhook(w http.ResponseWriter, r *http.Request) {
+    payload, _ := io.ReadAll(r.Body)
+    signature := r.Header.Get("X-Gitcode-Signature")
+
+    if !gitcode.VerifyWebhookSignature(payload, "your-webhook-secret", signature) {
+        http.Error(w, "Invalid signature", http.StatusUnauthorized)
+        return
+    }
+
+    // 签名有效，处理事件
+    event, _ := client.ParsePushEvent(payload)
+    fmt.Printf("Push to %s\n", event.Ref)
+}
+
+// 计算签名 (用于测试)
+sig := gitcode.ComputeWebhookSignature(payload, secret)
+```
+
+### 请求/响应中间件 (Hooks)
+
+添加请求前后的拦截器，用于日志、监控、调试：
+
+```go
+// 请求前 Hook
+client.AddRequestHook(func(req *http.Request) error {
+    log.Printf("[REQ] %s %s", req.Method, req.URL.Path)
+    req.Header.Set("X-Request-ID", uuid.New().String())
+    return nil
+})
+
+// 响应后 Hook
+client.AddResponseHook(func(resp *http.Response) error {
+    log.Printf("[RESP] %d %s", resp.StatusCode, resp.Request.URL.Path)
+    return nil
+})
+
+// 清除所有 Hook
+client.ClearHooks()
+```
+
+### Multipart 文件上传
+
+使用 `io.Reader` 上传文件内容：
+
+```go
+// 上传字节
+result, _ := client.UploadFileBytes(ctx, "owner", "repo", "hello.txt", []byte("Hello"))
+
+// 上传 io.Reader
+file, _ := os.Open("local-file.go")
+defer file.Close()
+result, _ = client.UploadFileReader(ctx, "owner", "repo", "remote-name.go", file)
+
+// 上传图片
+img, _ := os.Open("screenshot.png")
+defer img.Close()
+result, _ = client.UploadImageReader(ctx, "owner", "repo", "screenshot.png", img)
+```
+
+### 输入校验
+
+客户端自动校验必填字段，提前返回友好错误：
+
+```go
+// owner 或 repo 为空时返回 ValidationErrorField
+_, err := client.GetRepository(ctx, "", "repo")
+// err: "validation error: owner - owner is required"
+
+if gitcode.IsValidationError(err) {
+    fmt.Println(err)
+}
+```
+
+### 并发安全
+
+`SetAuthStyle`、`SetHTTPClient`、`AddRequestHook`、`AddResponseHook` 等方法均使用 `sync.RWMutex` 保护，可安全在多个 goroutine 中调用。
+
+---
+
 ## 通用类型
 
 `types.go` 中定义了若干容错类型,用于处理 GitCode API 返回值类型不稳定的情况:
@@ -969,9 +1117,17 @@ gitcode_api/
 ├── notifications_enhanced.go   # 增强通知操作
 ├── misc.go                     # Gitignore/License/Label 模板 / Markdown / 用户仓库
 ├── types.go                    # FlexInt/FlexString/NullableTime/Error 等通用类型 + Star/通知 API
+├── errors.go                   # 结构化错误类型: NotFound/Unauthorized/RateLimit/Conflict/Validation
+├── retry.go                    # Rate Limit 自动重试 + 指数退避
+├── pagination.go               # 自动分页迭代器 (泛型)
+├── hooks.go                    # 请求/响应中间件
+├── validate.go                 # 输入校验
+├── webhook_verify.go           # Webhook HMAC-SHA256 签名验证
+├── upload.go                   # Multipart 文件上传
 ├── gitcode_test.go             # 单元测试 + 真实 API 集成测试
+├── client_enhanced_test.go     # 新功能单元测试
 └── examples/
-    └── main.go                 # 可运行的使用示例
+    └── main.go                 # 完整使用示例
 ```
 
 ## API 覆盖率
