@@ -1,0 +1,66 @@
+run:
+  timeout: 5m
+  go: "1.26"
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - durationcheck
+    - errorlint
+    - exportloopref
+    - gosec
+    - misspell
+    - nilerr
+    - unconvert
+    - unparam
+    - wastedassign
+  disable:
+    - depguard
+    - funlen
+    - gocognit
+    - gocyclo
+    - godox
+    - lll
+    - nlreturn
+    - wrapcheck
+    - exhaustruct
+    - ireturn
+
+linters-settings:
+  errcheck:
+    check-type-assertions: true
+    check-blank: false
+  govet:
+    check-shadowing: false
+  misspell:
+    locale: US
+  gosec:
+    excludes:
+      - G104 # Errors unhandled (we handle them in API methods)
+      - G304 # File path provided as taint input (not applicable)
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 10
+  exclude-rules:
+    # Exclude some linters from running on test files
+    - path: _test\.go
+      linters:
+        - errcheck
+        - gosec
+        - unparam
+    # Allow unused parameters in interface implementations
+    - linters:
+        - unparam
+      text: "always receives"
+
+output:
+  formats:
+    - format: colored-line-number
+  sort-results: true
